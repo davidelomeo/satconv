@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "convolution"
+version = "0.3.0"
+description = "Convolve in-situ hyperspectral reflectance to satellite sensor bands."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Davide Lomeo", email = "davide.lomeo@kcl.ac.uk" }]
+requires-python = ">=3.9"
+dependencies = ["numpy", "pandas"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/davidelomeo/satellite_sensors_convolutions"
+
+[tool.setuptools]
+packages = ["convolution"]
+
+[tool.setuptools.package-data]
+convolution = ["SRFs_and_bandpasses/*.csv"]

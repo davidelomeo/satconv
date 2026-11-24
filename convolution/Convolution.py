@@ -1,166 +1,120 @@
-"""Module to convolve input hyperspectral data to target satellite sensors bands"""
+"""Convolve in-situ hyperspectral reflectance to the bands of a target satellite sensor."""
 
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+import os
+import warnings
+from importlib.resources import files
 
-# This script contains the class Convolution that allows to convolve input hyperspectral
-#  data to target satellite sensor bands
-#
-# Author: Davide Lomeo,
-# Email: davide.lomeo@kcl.ac.uk
-# GitHub: https://github.com/davidelomeo/satellite_sensors_convolutions
-# Date: 20 Nov 2024
-# Version: 0.2.0
-
-import json
 import numpy as np
 import pandas as pd
-from pkg_resources import resource_filename
-from convolution.apply_convolutions import convolve_bands_01nm, convolve_bands_1nm
 
-__all__ = ['Convolution']
+__all__ = ['Convolution', 'SENSORS']
+
+# np.trapz was removed in NumPy 2.x in favour of np.trapezoid
+_trapezoid = getattr(np, 'trapezoid', None) or np.trapz
+
+_DATA_DIR = files('convolution') / 'SRFs_and_bandpasses'
+
+SENSORS = {
+    'TM_L5': 'Landsat 5 Thematic Mapper',
+    'ETM+_L7': 'Landsat 7 Enhanced Thematic Mapper Plus',
+    'OLI_L8': 'Landsat 8 Operational Land Imager',
+    'OLI_L9': 'Landsat 9 Operational Land Imager 2',
+    'MSI_S2A': 'Sentinel-2A MultiSpectral Instrument',
+    'MSI_S2B': 'Sentinel-2B MultiSpectral Instrument',
+    'OLCI_S3A': 'Sentinel-3A Ocean and Land Colour Instrument',
+    'OLCI_S3B': 'Sentinel-3B Ocean and Land Colour Instrument',
+    'MERIS': 'Envisat Medium Resolution Imaging Spectrometer',
+    'MODIS_AQUA': 'MODIS on Aqua',
+    'MODIS_TERRA': 'MODIS on Terra',
+    'VIIRS_SNPP': 'VIIRS on Suomi NPP',
+    'VIIRS_NOAA20': 'VIIRS on NOAA-20',
+    'VIIRS_NOAA21': 'VIIRS on NOAA-21',
+    'GOCI': 'Geostationary Ocean Color Imager',
+    'GOCI_II': 'Geostationary Ocean Color Imager II',
+    'SeaWiFS': 'Sea-viewing Wide Field-of-view Sensor',
+    'Superdove': 'PlanetScope SuperDove',
+}
 
 
 class Convolution:
-    "Class to convolve input ground reflectance to target satelite bands"
+    """Convolve in-situ reflectance spectra to the bands of a satellite sensor.
+
+    Parameters
+    ----------
+    in_situ_rrs : pd.DataFrame
+        Index = wavelength in nm, one column per observation.
+    sensor_name : str
+        One of the keys of ``convolution.SENSORS``.
+    savefile : str, optional
+        Folder where ``<sensor_name>_conv.csv`` is written by ``do_convolutions()``.
+    """
 
     def __init__(self, in_situ_rrs, sensor_name, savefile=None):
-        """
-        Function that constructs the Convolution datatype using the input parameters.
+        if sensor_name not in SENSORS:
+            raise ValueError(
+                f"Invalid sensor name {sensor_name!r}. Available sensors: {', '.join(SENSORS)}")
 
-        Parameters
-        ----------
-        in_situ_rrs : pd.DataFrame
-            The input dataframe containing ground reflectance data.
-        
-        sensor_name : str
-            The name of the sensor for which to convolve the input reflectance data.
-            Available sensors include:
-            - 'TM_L5'           # Landsat 5 Thematic Mapper
-            - 'ETM+_L7'         # Landsat 7 Enhanced Thematic Mapper +
-            - 'OLI_L8'          # Landsat 8 Operational Land Imager
-            - 'OLI_L9'          # Landsat 9 Operational Land Imager
-            - 'MERIS'           # Medium Resolution Imaging Spectrometer
-            - 'MSI_S2A'         # Sentinel 2A MultiSpectral Instrument
-            - 'MSI_S2B'         # Sentinel 2B MultiSpectral Instrument
-            - 'OLCI_S3A'        # Sentinel 3A Ocean and Land Colour Instrument
-            - 'OLCI_S3B'        # Sentinel 3B Ocean and Land Colour Instrument
-            - 'MODIS_AQUA'      # Moderate Resolution Imaging Spectroradiometer on Aqua
-            - 'MODIS_TERRA'     # Moderate Resolution Imaging Spectroradiometer on Terra
-            - 'Superdove'       # Superdove satellite
-            - 'VIIRS_SNPP'      # Visible Infrared Imaging Radiometer Suite on Suomi NPP
-            - 'VIIRS_NOAA20'    # Visible Infrared Imaging Radiometer Suite on NOAA 20
-            - 'VIIRS_NOAA21'    # Visible Infrared Imaging Radiometer Suite on NOAA 21
-            - 'GOCI'            # Geostationary Ocean Color Imager
-            - 'GOCI_II'         # Geostationary Ocean Color Imager II
-
-        savefile : str, optional
-            Path to save the output dataframe containing the convolved bands, if provided.
-            NOTE: Do not include the file name and extension, just the target folder.
-
-        Functions
-        ---------
-        get_srf_and_bandpass()
-            Function to get the spectral response function and the bandpass information of the user-defined sensor.
-        
-        do_convolutions()
-            Function to initiate band convolution according to the user-defined sensor name.
-        """
-
-        # --- Public variables ---
-        # These variables are defined by the user
-        self.in_situ_rrs = in_situ_rrs
         self.sensor_name = sensor_name
         self.savefile = savefile
-
-        # --- Private variables ---
-        # These variables are not defined by the user but are needed to compute convolutions
-        self._available_sensors = [
-            'MSI_S2A', 'MSI_S2B', 'OLCI_S3A', 'OLCI_S3B',
-            'Superdove', 'TM_L5', 'ETM+_L7', 'OLI_L8',
-            'OLI_L9', 'MERIS', 'MODIS_AQUA', 'MODIS_TERRA',
-            'VIIRS_SNPP', 'VIIRS_NOAA20', 'VIIRS_NOAA21',
-            'GOCI', 'GOCI_II'
-        ]
-
-        # Raising a Value Error if the input sensor name doesn't match the names defined in the doc.
-        if self.sensor_name not in self._available_sensors:
-            raise ValueError('''
-            Invalid Sensor Name! Please look at the documentation by running 'help(Convolution)'
-            to see which sensors are available!''')
-
-        # ensuring that the input reflectance data indices are integers and columns are string
+        self.in_situ_rrs = in_situ_rrs.copy()
         self.in_situ_rrs.index = self.in_situ_rrs.index.astype(int)
         self.in_situ_rrs.columns = self.in_situ_rrs.columns.astype(str)
-
-        # Public variable not defined by the user but initiated by the user-defined sensor_name
         self.srf, self.bandpass = self.get_srf_and_bandpass()
-        self.bandpass['Width (FWHM)'] = self.bandpass['Width (FWHM)'].apply(
-            lambda x: int(round(float(x))) | 1)  # Ensure widths are odd
-
-        # Initialize the output DataFrame
-        self.convolved_bands = pd.DataFrame(
-            index=in_situ_rrs.columns, columns=self.bandpass['Nominal Center Wavelength'])
-
-        if self.savefile:
-            self._save_to_file()
-
-    def _save_to_file(self):
-        """Private function to save the produced convolution to the user-defined path"""
-
-        self.convolved_bands.to_csv(
-           self.savefile + f'/{self.sensor_name}_conv.csv')
+        self.convolved_bands = None
 
     def get_srf_and_bandpass(self):
-        """Function that returns the spectral response function and the bandpass of the user-defined sensor
-
-        Returns
-        --------
-        pd.DataFrame()
-        The function returns a dataframe containing the band-wise spectral response function and bandpass of
-        the user-defined sensor
-        """
-
-        path_to_srf = resource_filename(
-            'convolution', f'SRFs_and_bandpasses/{self.sensor_name}_SRF.csv')
-        path_to_bandpass = resource_filename(
-            'convolution', f'SRFs_and_bandpasses/{self.sensor_name}_bandpass.csv')
-
-        return pd.read_csv(path_to_srf, index_col='wl'), pd.read_csv(path_to_bandpass)
+        """Return the sensor's spectral response function and bandpass table as DataFrames."""
+        srf = pd.read_csv(_DATA_DIR / f'{self.sensor_name}_SRF.csv', index_col='wl')
+        bandpass = pd.read_csv(_DATA_DIR / f'{self.sensor_name}_bandpass.csv')
+        return srf, bandpass
 
     def do_convolutions(self):
-        """Function to perform band convolution based on the user-defined sensor name.
+        """Convolve every observation to every sensor band.
 
         Returns
         -------
         pd.DataFrame
-            The function returns a dataframe containing the convolved bands. If the 'savefile' 
-            parameter was provided, the dataframe will also be saved to the specified path.
+            Rows = observations, columns = band nominal centre wavelengths (nm).
+            Bands with no input data inside their FWHM are NaN.
         """
+        wl = self.in_situ_rrs.index.values
+        rrs = self.in_situ_rrs.values.astype(float)
+        result, missing = {}, []
 
-        self.warnings = []
-    
-        # Iterate over each col in the in situ data
-        for col in self.in_situ_rrs.columns:
-            in_situ_wl = self.in_situ_rrs.index.values
-            in_situ_rrs_col = self.in_situ_rrs[col].values
+        for center, fwhm in zip(self.bandpass['Nominal Center Wavelength'],
+                                self.bandpass['Width (FWHM)']):
+            # A band needs input data inside its FWHM; it is then integrated over the whole SRF
+            has_data = ((wl >= center - fwhm / 2) & (wl <= center + fwhm / 2)).any()
+            result[center] = (_convolve_band(wl, rrs, self.srf[str(int(center))]) if has_data
+                              else np.full(rrs.shape[1], np.nan))
+            if np.isnan(result[center]).all():
+                missing.append(center)
 
-            # Iterate over each band in the bandpass file
-            for _, band in self.bandpass.iterrows():
-                center_wl = band['Nominal Center Wavelength']
-                width = band['Width (FWHM)']
+        if missing:
+            warnings.warn(f'{self.sensor_name}: no input data for bands {missing} nm; returned NaN.')
 
-                if self.sensor_name in ['OLCI_S3A', 'OLCI_S3B', 'MERIS']:
-                    convolved_value = convolve_bands_01nm(self, center_wl, width, in_situ_wl, in_situ_rrs_col)
-                else:
-                    convolved_value = convolve_bands_1nm(self, center_wl, width, in_situ_wl, in_situ_rrs_col)
-    
-                # Store the result
-                self.convolved_bands.at[col, center_wl] = convolved_value
-        
-        self.convolved_bands.columns.name = None
+        self.convolved_bands = pd.DataFrame(result, index=self.in_situ_rrs.columns)
         self.convolved_bands.index.name = 'in_situ_obs'
-        
-        for warning in np.unique(self.warnings):
-            print(warning)
+
+        if self.savefile:
+            self.convolved_bands.to_csv(os.path.join(self.savefile, f'{self.sensor_name}_conv.csv'))
         return self.convolved_bands
+
+
+def _convolve_band(wl, rrs, srf):
+    """SRF-weighted mean of each column of ``rrs``, using the whole SRF curve.
+
+    The input spectra are linearly interpolated onto the SRF wavelength grid, limited to
+    the range covered by the input data, then integrated with the trapezoidal rule.
+    Negative SRF values (measurement noise in some tables) are treated as zero.
+    """
+    srf_wl = srf.index.values
+    keep = (srf_wl >= wl.min()) & (srf_wl <= wl.max())
+    srf_wl, response = srf_wl[keep], np.clip(srf.values[keep], 0, None)
+
+    denominator = _trapezoid(response, srf_wl)
+    if denominator == 0:
+        return np.full(rrs.shape[1], np.nan)
+
+    interp = np.column_stack([np.interp(srf_wl, wl, col) for col in rrs.T])
+    return _trapezoid(interp * response[:, None], srf_wl, axis=0) / denominator
