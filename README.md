@@ -1,4 +1,4 @@
-# Satellite Sensors Convolutions
+# satconv: Satellite Sensor Convolutions
 
 Convolve in-situ hyperspectral reflectance measurements to the bands of a target
 satellite sensor, using each sensor's Spectral Response Function (SRF).
@@ -8,14 +8,29 @@ satellite sensor, using each sensor's Spectral Response Function (SRF).
 Requires Python 3.9+. Install directly from GitHub:
 
 ```bash
-pip install git+https://github.com/davidelomeo/satellite_sensors_convolutions.git
+pip install git+https://github.com/davidelomeo/satconv.git
+```
+
+With [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv pip install git+https://github.com/davidelomeo/satconv.git
+# or, to add it to a uv-managed project's dependencies:
+uv add git+https://github.com/davidelomeo/satconv.git
+```
+
+With conda or mamba, activate your environment and use the `pip install` command above:
+
+```bash
+conda activate my-env
+pip install git+https://github.com/davidelomeo/satconv.git
 ```
 
 Or, from a local clone (use `-e` for an editable install while developing):
 
 ```bash
-git clone https://github.com/davidelomeo/satellite_sensors_convolutions.git
-cd satellite_sensors_convolutions
+git clone https://github.com/davidelomeo/satconv.git
+cd satconv
 pip install -e .
 ```
 

@@ -16,7 +16,7 @@ dependencies = ["numpy", "pandas"]
 test = ["pytest"]
 
 [project.urls]
-Homepage = "https://github.com/davidelomeo/satellite_sensors_convolutions"
+Homepage = "https://github.com/davidelomeo/satconv"
 
 [tool.setuptools]
 packages = ["convolution"]
