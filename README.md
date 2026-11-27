@@ -98,6 +98,18 @@ output file is only replaced once the new one has been written completely.
 
 `python -m convolution` runs the same command.
 
+### Together with COI
+
+The output can go straight into [`coi`](https://github.com/davidelomeo/coi):
+
+```bash
+satconv -i spectra.nc -o olci.nc -s OLCI_S3A -v rrs --range 412 779
+```
+
+```bash
+coi -i olci.nc -o coi.nc -s OLCI --keep rrs_QC latitude longitude
+```
+
 ## Python
 
 `convolve` returns the same kind of object that you give it.
