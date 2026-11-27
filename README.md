@@ -3,77 +3,254 @@
 Convolve in-situ hyperspectral reflectance measurements to the bands of a target
 satellite sensor, using each sensor's Spectral Response Function (SRF).
 
+You can use it from the command line on netCDF, CSV and TSV files, or from Python on
+NumPy arrays, xarray DataArrays and pandas DataFrames.
+
+**Contents:** [Installation](#installation) · [Command line](#command-line) · [Python](#python) · [How bands are computed](#how-bands-are-computed) · [Upgrading from 0.3](#upgrading-from-03) · [Tests](#running-the-tests) · [Sensors](#available-sensors)
+
 ## Installation
 
-Requires Python 3.9+. Install directly from GitHub:
+Requires Python 3.11 or newer. Install directly from GitHub:
 
 ```bash
-pip install git+https://github.com/davidelomeo/satconv.git
+pip install "git+https://github.com/davidelomeo/satconv.git"
 ```
 
-With [uv](https://docs.astral.sh/uv/):
+With [uv](https://docs.astral.sh/uv/), into the current environment:
 
 ```bash
-uv pip install git+https://github.com/davidelomeo/satconv.git
-# or, to add it to a uv-managed project's dependencies:
-uv add git+https://github.com/davidelomeo/satconv.git
+uv pip install "git+https://github.com/davidelomeo/satconv.git"
 ```
 
-With conda or mamba, activate your environment and use the `pip install` command above:
+Or as a dependency of a uv project:
 
 ```bash
-conda activate my-env
-pip install git+https://github.com/davidelomeo/satconv.git
+uv add "git+https://github.com/davidelomeo/satconv.git"
 ```
+
+With conda or mamba, activate your environment and use the `pip install` command above.
 
 Or, from a local clone (use `-e` for an editable install while developing):
 
 ```bash
 git clone https://github.com/davidelomeo/satconv.git
-cd satconv
-pip install -e .
 ```
 
-The package is imported as `convolution`. Dependencies (`numpy`, `pandas`) are installed automatically.
+```bash
+cd satconv && pip install -e .
+```
 
-## Usage
+The package is imported as `convolution`. Its dependencies (`numpy`, `pandas`, `xarray`,
+`netCDF4`) are installed automatically. For lazy, chunked processing of large files, add dask:
 
-The input is a `pandas.DataFrame` whose **index is wavelength in nm** and where
-**each column is one observation/spectrum**:
+```bash
+pip install "convolution[dask] @ git+https://github.com/davidelomeo/satconv.git"
+```
+
+## Command line
+
+```bash
+satconv -i spectra.nc -o olci.nc -s OLCI_S3A -v rrs
+```
+
+The file extension sets the input and output types:
+
+| Extension | Layout |
+|---|---|
+| `.nc`, `.nc4`, `.cdf` | netCDF with one or more variables that have a wavelength dimension |
+| `.csv`, `.tsv` | Input: wavelength (nm) in the first column, one column per observation. Output: one row per observation, one column per band |
+
+| Option | Description | Default |
+|---|---|---|
+| `-i`, `--input` | Input file | required |
+| `-o`, `--output` | Output file (folders are created if needed) | required |
+| `-s`, `--sensor` | Target sensor, case-insensitive ([list](#available-sensors)) | required |
+| `-v`, `--variable` | netCDF variable(s) to convolve | the only one with wavelengths |
+| `-d`, `--dim` | Name of the wavelength dimension | recognised by its name |
+| `--range MIN MAX` | Only write bands with centres from MIN to MAX nm (inclusive) | all bands |
+| `--max-missing` | Largest share of a band's response allowed on NaN input | 0.01 |
+| `--list-sensors` | List the sensors and their bands | |
+| `--version` | Print the version and exit | |
+
+More examples:
+
+```bash
+# netCDF to a table, keeping only the bands from 412 to 779 nm
+satconv -i spectra.nc -o olci.csv -s OLCI_S3A -v rrs --range 412 779
+
+# two variables at once
+satconv -i spectra.nc -o msi.nc -s MSI_S2A -v rrs irradiance
+
+# CSV to CSV
+satconv -i spectra.csv -o modis.csv -s MODIS_AQUA
+```
+
+netCDF output keeps the input's global attributes and every variable that does not depend on
+wavelength (time, position, quality flags, …), copied with their stored types, attributes and
+values. It adds the `satellite_sensor` and `history` attributes. Two limits: only the root
+group of a netCDF-4 file is read and written, and variables of compound or variable-length
+numeric types are left out, with a warning.
+
+Text output holds a single variable.
+
+The command exits with status 1 on an error. It never overwrites its input file, and an existing
+output file is only replaced once the new one has been written completely.
+
+`python -m convolution` runs the same command.
+
+### Together with COI
+
+The output can go straight into [`coi`](https://github.com/davidelomeo/coi):
+
+```bash
+satconv -i spectra.nc -o olci.nc -s OLCI_S3A -v rrs --range 412 779
+```
+
+```bash
+coi -i olci.nc -o coi.nc -s OLCI --keep rrs_QC latitude longitude
+```
+
+## Python
+
+`convolve` returns the same kind of object that you give it.
+
+### xarray
+
+```python
+import xarray as xr
+from convolution import convolve
+
+ds = xr.open_dataset("spectra.nc")
+
+olci = convolve(
+    ds["rrs"],
+    sensor="OLCI_S3A",
+)
+
+olci = olci.sel(wavelength=slice(412, 779))
+```
+
+The result has a `wavelength` dimension (the band centres, last) in place of the input's
+wavelength dimension, and keeps the other coordinates and the attributes.
+
+The input's wavelength dimension is found through a coordinate called `wavelength` (the
+command also accepts a data variable of that name), or through its name (anything containing `wavelength`, or `wl`, `wvl`, `lambda`). Otherwise, name
+it with `dim=`. Dask-backed input stays lazy:
+
+```python
+ds = xr.open_dataset("big_file.nc", chunks={"time": 10_000})
+
+olci = convolve(
+    ds["rrs"],
+    sensor="OLCI_S3A",
+)  # nothing is computed until you write or load the result
+```
+
+### NumPy
+
+Wavelength is the **last** axis; any number of axes can come before it.
+
+```python
+from convolution import convolve
+
+values, centres = convolve(
+    spectra,                  # (..., n_wavelengths)
+    sensor="OLCI_S3A",
+    wavelengths=wavelengths,  # nm, required for NumPy input
+)
+# values: (..., n_bands), centres: (n_bands,) nominal band centres in nm
+```
+
+### pandas
+
+The index is wavelength in nm and each column is one observation:
 
 ```python
 import pandas as pd
-from convolution import Convolution
+from convolution import convolve
 
-# index = wavelength (nm), columns = observations
 rrs = pd.read_csv("my_spectra.csv", index_col=0)
 
-conv = Convolution(rrs, "OLCI_S3A")
-bands = conv.do_convolutions()   # rows = observations, columns = band nominal wavelengths
-print(bands)
+bands = convolve(
+    rrs,
+    sensor="OLCI_S3A",
+)  # rows = observations, columns = band centres
 ```
 
-Retrieve the SRF and bandpass table used for a sensor:
+The `Convolution` class of earlier versions still works, and returns the same table:
 
 ```python
+from convolution import Convolution
+
+conv = Convolution(
+    in_situ_rrs=rrs,
+    sensor_name="OLCI_S3A",
+    savefile=None,  # or a folder, to also write <folder>/OLCI_S3A_conv.csv
+)
+
+bands = conv.do_convolutions()
 srf, bandpass = conv.get_srf_and_bandpass()
 ```
 
-To also write the result to `<folder>/<sensor_name>_conv.csv`, pass `savefile="<folder>"`.
+### The weight matrix
 
-Bands that fall outside the wavelength range of your input data are returned as `NaN`
-and a warning is issued. The list of sensor names is also available as `convolution.SENSORS`.
+A convolution is a matrix product. `band_weights` returns the matrix, so that you can apply it
+with any array library, or export it to another platform:
+
+```python
+from convolution import band_weights
+
+weights, centres = band_weights(
+    wavelengths,
+    sensor="OLCI_S3A",
+)  # weights: (n_bands, n_wavelengths)
+
+values = spectra @ weights.T
+```
+
+The plain product does no checks on the data: bands that your wavelengths do not cover have a
+row of zeros (`convolve` returns them as NaN), and any NaN in a spectrum spreads to every band.
+
+## How bands are computed
+
+Each band is ∫ rrs · SRF dλ / ∫ SRF dλ, with the spectrum linearly interpolated onto the SRF
+wavelengths and integrated with the trapezoidal rule. The whole SRF curve is used, or the part
+of it that your wavelengths cover.
+
+- **Wavelengths** can be in any order and at any spacing, including decimals. Duplicates are an
+  error.
+- **Coverage:** a band with no input wavelength within its nominal centre ± FWHM / 2 is `NaN`,
+  and a warning is issued.
+- **Missing values:** NaN and infinite values are missing. A band is `NaN` for a spectrum if
+  more than `max_missing` (default 1 %) of its response falls on missing values. Otherwise it
+  is computed from the values that are there. A warning is issued if this leaves a band without
+  a result for any spectrum (not checked for dask-backed input).
+
+## Upgrading from 0.3
+
+- Python 3.11+ and NumPy 2 are required. `xarray` and `netCDF4` are now dependencies.
+- Decimal wavelengths are used as given. Version 0.3 cut them to whole nanometres, so results
+  for non-integer wavelength grids differ slightly.
+- A missing value now only affects the bands that rely on it (see `max_missing`).
+- Unsorted wavelengths are accepted, and duplicated wavelengths raise an error.
+- `Convolution(...).do_convolutions()` is otherwise unchanged. It still uses the instance's
+  `srf` and `bandpass` tables, so edits to them, or an overridden `get_srf_and_bandpass`, apply.
 
 ## Running the tests
 
 ```bash
 pip install -e ".[test]"
+```
+
+```bash
 pytest
 ```
 
+GitHub Actions runs the tests on Python 3.11 and 3.14, and lints with `ruff check`.
+
 ## Available sensors
 
-| `sensor_name`  | Sensor                                   |
+| `sensor`       | Sensor                                   |
 |----------------|------------------------------------------|
 | `TM_L5`        | Landsat 5 Thematic Mapper                |
 | `ETM+_L7`      | Landsat 7 Enhanced Thematic Mapper Plus  |
