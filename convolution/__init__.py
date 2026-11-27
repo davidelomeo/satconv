@@ -2,9 +2,10 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .Convolution import SENSORS, Convolution
+from .Convolution import Convolution, Convolved, convolve
+from .core import SENSORS, band_weights
 
-__all__ = ['Convolution', 'SENSORS']
+__all__ = ['SENSORS', 'Convolution', 'Convolved', 'band_weights', 'convolve']
 
 try:
     __version__ = version(__name__)
